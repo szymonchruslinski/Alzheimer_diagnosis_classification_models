@@ -1,0 +1,937 @@
+---
+title: |
+  Zastosowanie modeli klasyfikacyjnych  
+  w diagnostyce choroby Alzheimera
+author: "Szymon Chruśliński"
+#date: "2025-05-15"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+```
+
+```{r, echo = FALSE}
+set.seed(2024)
+library(dplyr)
+library(tidyverse)
+library(rio)
+library(DT)
+library(corrplot)
+library(infotheo)
+library(knitr)
+library(tidymodels)
+library(ggplot2)
+library(themis)
+library(discrim)
+library(naivebayes)
+library(kableExtra)
+library(nortest)
+```
+
+### **Wybór zbioru danych**
+
+Do projektu wybrano zbiór danych dotyczący choroby Alzheimera, zawierający informacje medyczne dla 2149 pacjentów. Dane obejmują m.in. cechy demograficzne, historię chorób, wyniki testów kognitywnych oraz diagnozy kliniczne. Zbiór ten umożliwia budowę modeli predykcyjnych oraz prowadzenie analiz statystycznych związanych z rozpoznawaniem i monitorowaniem przebiegu choroby.
+
+Źródło danych: Rabie El Kharoua (2024), Alzheimer’s Disease Dataset, Kaggle, DOI: [10.34740/KAGGLE/DSV/8668279](https://doi.org/10.34740/KAGGLE/DSV/8668279)
+
+```{r, echo = FALSE}
+data <- import("alzheimers_disease_data.csv")
+datatable(head(data, 5), options = list(dom = 't', scrollX = TRUE), rownames = FALSE)
+```
+
+<br>
+
+```{r, echo=FALSE}
+ggplot(data, aes(x = factor(Diagnosis), fill = factor(Diagnosis))) +
+  geom_bar(width = 0.6) +
+  geom_text(stat = "count", aes(label = ..count..), 
+            vjust = 3.5, color = "white", size = 5) +
+  labs(
+    title = "Rozkład klas",
+    x = "Diagnoza Alzheimera (0 = nie, 1 = tak)",
+    y = "Liczba obserwacji"
+  ) +
+  theme_minimal(base_size = 14) +
+  scale_fill_manual(values = c("lightblue", "tomato")) +
+  theme(legend.position = "none",
+        plot.title = element_text(face = "bold", hjust = 0.5))
+```
+
+Zbiór danych jest niezbalansowany – 1389 obserwacji (65%) należy do klasy 0, a 760 (35%) do klasy 1.
+
+### **Problem predykcyjny**
+
+Celem projektu jest zbudowanie modelu klasyfikacyjnego, który na podstawie danych opisujących stan pacjenta przewiduje, czy pacjent cierpi na chorobę Alzheimera. Zmienną objaśnianą (targetem) jest Diagnosis - zmienna binarna, gdzie:
+
+- 0: oznacza brak diagnozy choroby
+- 1: oznacza potwierdzoną diagnozę Alzheimera
+
+
+### **Charakterystyka zbioru danych**
+
+`PatientID` - unikalny identyfikator przypisany każdemu pacjentowi (zakres od 4751 do 6900)
+
+ **Dane demograficzne:**
+
+`Age` - wiek pacjentów (zakres od 60 do 90 lat)
+
+`Gender` - płeć pacjentów, gdzie 0 oznacza mężczyznę, a 1 kobietę
+
+`Ethnicity` - przynależność etniczna pacjentów, kodowana jako:
+
+- 0: biała (Caucasian)
+- 1: afroamerykańska (African American)
+- 2: azjatycka (Asian) 
+- 3: inna (Other)
+
+`EducationLevel` - poziom wykształcenia pacjentów, kodowany jako:
+
+- 0: brak wykształcenia
+- 1: szkoła średnia
+- 2: licencjat
+- 3: wyższe
+
+
+ **Czynniki stylu życia:**
+
+`BMI` - wskaźnik masy ciała (Body Mass Index), zakres od 15 do 40
+
+`Smoking` - status palenia papierosów, gdzie 0 oznacza „Nie”, a 1 oznacza „Tak”
+
+`AlcoholConsumption` - tygodniowe spożycie alkoholu (w jednostkach), zakres od 0 do 20
+
+`PhysicalActivity` - tygodniowa aktywność fizyczna (w godzinach), zakres od 0 do 10
+
+`DietQuality` - ocena jakości diety, zakres od 0 do 10
+
+`SleepQuality` - ocena jakości snu, zakres od 4 do 10
+
+
+ **Historia medyczna:**
+
+`FamilyHistoryAlzheimers` - występowanie choroby Alzheimera w rodzinie, gdzie 0 oznacza „Nie”, a 1 oznacza „Tak”
+
+`CardiovascularDisease` - obecność chorób układu krążenia, gdzie 0 oznacza „Nie”, a 1 oznacza „Tak”
+
+`Diabetes` - obecność cukrzycy, gdzie 0 oznacza „Nie”, a 1 oznacza „Tak”
+
+`Depression` - obecność depresji, gdzie 0 oznacza „Nie”, a 1 oznacza „Tak”
+
+`HeadInjury` - historia urazu głowy, gdzie 0 oznacza „Nie”, a 1 oznacza „Tak”
+
+`Hypertension` - obecność nadciśnienia, gdzie 0 oznacza „Nie”, a 1 oznacza „Tak”
+
+
+ **Pomiary kliniczne:**
+
+`SystolicBP` - ciśnienie skurczowe krwi, zakres od 90 do 180 mmHg
+
+`DiastolicBP` - ciśnienie rozkurczowe krwi, zakres od 60 do 120 mmHg
+
+`CholesterolTotal` - całkowity poziom cholesterolu, zakres od 150 do 300 mg/dL
+
+`CholesterolLDL` - poziom cholesterolu LDL, zakres od 50 do 200 mg/dL
+
+`CholesterolHDL` - poziom cholesterolu HDL, zakres od 20 do 100 mg/dL
+
+`CholesterolTriglycerides` - poziom trójglicerydów, zakres od 50 do 400 mg/dL
+
+#### **Oceny funkcji poznawczych i funkcjonalnych:**
+
+`MMSE` – wynik testu Mini-Mental State Examination, zakres od 0 do 30. Niższe wartości wskazują na zaburzenia poznawcze
+
+`FunctionalAssessment` – wynik oceny funkcjonalnej, zakres od 0 do 10. Niższe wartości oznaczają większe upośledzenie funkcji
+
+`MemoryComplaints` – obecność skarg na pamięć, gdzie 0 oznacza „Nie”, a 1 oznacza „Tak”
+
+`BehavioralProblems` – obecność problemów behawioralnych, gdzie 0 oznacza „Nie”, a 1 oznacza „Tak”
+
+`ADL` – wynik w skali wykonywania codziennych czynności (Activities of Daily Living), zakres od 0 do 10. Niższe wartości wskazują na większe trudności
+
+
+#### **Objawy:**
+
+`Confusion` – występowanie dezorientacji, gdzie 0 oznacza „Nie”, a 1 oznacza „Tak”
+
+`Disorientation` – występowanie zaburzeń orientacji, gdzie 0 oznacza „Nie”, a 1 oznacza „Tak”
+
+`PersonalityChanges` – zmiany osobowości, gdzie 0 oznacza „Nie”, a 1 oznacza „Tak”
+
+`DifficultyCompletingTasks` – trudności w wykonywaniu zadań, gdzie 0 oznacza „Nie”, a 1 oznacza „Tak”
+
+`Forgetfulness` – skłonność do zapominania, gdzie 0 oznacza „Nie”, a 1 oznacza „Tak”
+
+
+#### **Informacje diagnostyczne:**
+
+`Diagnosis` – status diagnozy choroby Alzheimera, gdzie 0 oznacza brak choroby, a 1 oznacza rozpoznanie choroby
+
+
+#### **Informacje poufne:**
+
+`DoctorInCharge` – ta kolumna zawiera poufne informacje o lekarzu prowadzącym, z wartością „XXXConfid” dla wszystkich pacjentów
+
+
+### **Sprawdzenie braków danych**
+```{r}
+any(is.na(data))
+```
+Zbiór danych nie zawiera brakujących wartości.
+
+### **Czyszczenie zbioru danych**
+```{r}
+data <- data %>% 
+  select(-c("PatientID", "DoctorInCharge"))
+```
+Zmienne `PatientID` oraz `DoctorInCharge` zostały usunięte ze zbioru, ponieważ nie zawierają informacji istotnych z punktu widzenia modelowania.
+
+### **Podział na zbiór testowy i treningowy**
+```{r}
+set.seed(2024)
+
+split <- initial_split(data, prop = 0.8, strata = Diagnosis)
+
+Train_Original <- training(split)
+Test_Original <- testing(split)
+```
+Zbiór danych jest niezbalansowany klasowo, dlatego w celu zachowania rozkładu klas w zbiorach treningowym i testowym zastosowano **losowanie warstwowe** z użyciem parametru strata.
+
+### **Kodowanie zmiennych kategorycznych**
+```{r}
+factor_vars <- c(
+  "Gender", "Smoking", "FamilyHistoryAlzheimers", "CardiovascularDisease", 
+  "Diabetes", "Depression", "HeadInjury", "Hypertension", 
+  "MemoryComplaints", "BehavioralProblems", "Confusion", "Disorientation", 
+  "PersonalityChanges", "DifficultyCompletingTasks", "Forgetfulness", 
+  "Diagnosis", "Ethnicity", "EducationLevel"
+)
+
+Train_Original[factor_vars] <- lapply(Train_Original[factor_vars], as.factor)
+Test_Original[factor_vars] <- lapply(Test_Original[factor_vars], as.factor)
+```
+Zmienne kategoryczne (binarnie i wielopoziomowo kodowane) zostały przekonwertowane do typu factor, aby zapewnić ich prawidłową interpretację.
+
+### **Wstępna selekcja cech o niskiej zmienności**
+```{r}
+data_num <- Train_Original %>% select(where(is.numeric))
+data_cat <- Train_Original %>% select(where(is.factor))
+
+var_num <- sapply(data_num, var, na.rm = TRUE)
+low_var_num_cols <- names(var_num[var_num < 1e-5])
+
+prop_cat <- sapply(data_cat, function(x) max(prop.table(table(x))))
+low_var_cat_cols <- names(prop_cat[prop_cat > 0.95])
+
+low_variance_cols <- c(low_var_num_cols, low_var_cat_cols)
+low_variance_cols
+```
+Przeprowadzono wstępną selekcję cech na podstawie zmienności. Zmienna była uznawana za mało informacyjną, jeśli jej wariancja była bliska zeru (dla danych liczbowych) lub jeśli jedna z kategorii występowała w ponad 95% przypadków (dla danych kategorycznych). W analizowanym zbiorze nie wykryto zmiennych spełniających te kryteria.
+
+### **Sprawdzenie współliniowości zmiennych liczbowych**
+```{r}
+cor_matrix <- cor(data_num)
+corrplot(cor_matrix, method = "color", tl.cex = 0.8)
+```
+
+Analiza macierzy korelacji między zmiennymi liczbowymi nie wykazała silnych zależności liniowych, dlatego nie było konieczności eliminacji żadnej zmiennej na podstawie współliniowości.
+
+### **Selekcja cech na podstawie Mutual Information**
+
+Do oceny zależności pomiędzy zmiennymi objaśniającymi a zmienną zależną `Diagnosis` wykorzystano miarę Mutual Information.
+```{r}
+data2 <- data.frame(sapply(Train_Original, as.numeric))
+
+mi_results <- data.frame(
+  Variable = setdiff(names(data2), "Diagnosis"),
+  Mi_Score = sapply(setdiff(names(data2), "Diagnosis"), 
+                    function(var) mutinformation(infotheo::discretize(data2[[var]]),
+                                                 infotheo::discretize(data2$Diagnosis))))
+
+mi_results <- mi_results[order(-mi_results$Mi_Score), ]
+mi_results$Mi_Score <- format(round(mi_results$Mi_Score, 8), scientific = FALSE)
+```
+<br>
+
+Poniżej przedstawiono 20 zmiennych o najwyższej wartości mutual information względem zmiennej `Diagnosis`.
+
+<br>
+```{r, echo = FALSE}
+left  <- mi_results[1:10, ]
+right <- mi_results[11:20, ]
+
+top20_split <- data.frame(
+  Variable_1 = left$Variable,
+  Mi_Score_1 = left$Mi_Score,
+  Variable_2 = right$Variable,
+  Mi_Score_2 = right$Mi_Score
+)
+
+top20_split %>%
+  kbl() %>%
+  kable_styling(
+    bootstrap_options = c("striped", "hover", "condensed", "responsive"),
+    full_width = FALSE,
+    position = "center"
+  ) %>%
+  row_spec(0, bold = TRUE, background = "#D3D3D3")
+```
+<br>
+
+```{r, echo=FALSE}
+mi_results$Mi_Score <- as.numeric(mi_results$Mi_Score)
+mi_results$Index <- seq_len(nrow(mi_results))
+
+ggplot(mi_results, aes(x = Index, y = Mi_Score)) +
+  geom_line(color = "steelblue", size = 1) +
+  geom_point(color = "darkred", size = 2) +
+  geom_hline(yintercept = 0.01, color = "red", linetype = "dashed", size = 1) +
+  labs(title = "Wykres łokciowy - Mutual Information",
+       x = "Numer cechy (wg rankingu)",
+       y = "Mutual Information (MI)") +
+  theme_minimal()
+```
+
+Pomimo że zarówno wartości przedstawione w tabeli, jak i wykres łokciowy sugerują wybór 5 najbardziej informacyjnych cech, w kolejnych krokach uwzględnione zostanie 10 zmiennych z najwyższym wynikiem, aby przeprowadzić dodatkową ocenę ich przydatności. Zostaną one zweryfikowane pod kątem zdolności do rozróżniania klas, co pozwoli na bardziej świadomy i trafny wybór cech do dalszego modelowania.
+
+<br>
+```{r}
+selected_vars <- head(mi_results[order(-mi_results$Mi_Score), "Variable"], 10)
+
+Train_Original <- Train_Original[, c(selected_vars, "Diagnosis")]
+Test_Original <- Test_Original[, c(selected_vars, "Diagnosis")]
+```
+Oryginalny zbiór danych został zawężony do 10 zmiennych o najwyższej wartości Mutual Information oraz zmiennej zależnej `Diagnosis`.
+
+### **Analiza zależności między zmiennymi numerycznymi a diagnozą Alzheimera**
+```{r, echo=FALSE}
+Train_Long <- Train_Original %>%
+  pivot_longer(cols = c(FunctionalAssessment, ADL, MMSE),
+               names_to = "Zmienna",
+               values_to = "Wartosc") %>%
+  mutate(Zmienna = case_when(
+    Zmienna == "MMSE" ~ "MMSE (poznawcze)",
+    Zmienna == "ADL" ~ "ADL (codzienne czynności)",
+    Zmienna == "FunctionalAssessment" ~ "FunctionalAssessment (Ocena funkcjonalna)"
+  )) %>%
+  mutate(Zmienna = factor(Zmienna, levels = c("FunctionalAssessment (Ocena funkcjonalna)", "ADL (codzienne czynności)", "MMSE (poznawcze)")))
+```
+
+```{r, fig.width=9, fig.height=5, echo=FALSE}
+ggplot(Train_Long, aes(x = factor(Diagnosis), y = Wartosc, fill = factor(Diagnosis))) +
+  geom_boxplot() +
+  facet_wrap(~ Zmienna, scales = "free_y") +
+  labs(title = "Zależności między funkcjonowaniem pacjenta a diagnozą Alzheimera",
+       x = "Diagnoza Alzheimera (0 = nie, 1 = tak)",
+       y = "Wartość") +
+  theme_minimal() +
+  scale_fill_manual(values = c("lightblue", "tomato")) +
+  theme(legend.position = "none",
+        plot.title = element_text(face = "bold", hjust = 0.5))
+```
+
+Wszystkie trzy cechy wykazują dobrą zdolność do klasyfikacji diagnozy Alzheimera.
+
+`FunctionalAssessment` i `ADL` wyraźnie rozdzielają grupy pacjentów. `MMSE` również pokazuje istotną różnicę między grupami, co potwierdza jego przydatność klasyfikacyjną.
+
+<br>
+
+```{r, echo=FALSE}
+Train_Long <- Train_Original %>%
+  pivot_longer(cols = c(CholesterolTotal, CholesterolTriglycerides, CholesterolHDL, DietQuality, AlcoholConsumption),
+               names_to = "Zmienna",
+               values_to = "Wartosc") %>%
+  mutate(Zmienna = factor(Zmienna, levels = c("CholesterolTotal", "CholesterolTriglycerides", "CholesterolHDL", "DietQuality", "AlcoholConsumption")))
+```
+
+```{r, fig.width=12, fig.height=5, echo=FALSE}
+ggplot(Train_Long, aes(x = factor(Diagnosis), y = Wartosc, fill = factor(Diagnosis))) +
+  geom_boxplot(outlier.size = 0.5) +
+  facet_wrap(~ Zmienna, scales = "free_y", ncol = 5) +
+  labs(
+    title = "Zależności między wybranymi cechami a diagnozą Alzheimera",
+    x = "Diagnoza Alzheimera (0 = nie, 1 = tak)",
+    y = "Wartość"
+  ) +
+  theme_minimal(base_size = 9) +
+  scale_fill_manual(values = c("lightblue", "tomato")) +
+  theme(
+    legend.position = "none",
+    plot.title = element_text(face = "bold", hjust = 0.5),
+    strip.text = element_text(size = 9))
+```
+
+W przypadku przedstawionych pięciu zmiennych nie zaobserwowano wyraźnych różnic między grupami pacjentów z i bez diagnozy Alzheimera. Rozkłady wartości są do siebie zbliżone, co sugeruje, że zmienne mają ograniczoną wartość klasyfikacyjną.
+
+<br>
+
+W celu potwierdzenia wniosków wynikających z analizy wykresów pudełkowych, przeprowadzono testy statystyczne zmiennych względem `Diagnosis`.
+
+```{r, echo=FALSE}
+num_vars <- setdiff(names(Train_Original), c("Diagnosis", "MemoryComplaints", "BehavioralProblems"))
+
+normality_results <- data.frame(
+  Variable = character(),
+  P_Group0 = numeric(),
+  P_Group1 = numeric(),
+  stringsAsFactors = FALSE
+)
+
+for (var in num_vars) {
+  group0 <- Train_Original[[var]][Train_Original$Diagnosis == 0]
+  group1 <- Train_Original[[var]][Train_Original$Diagnosis == 1]
+
+  p0 <- lillie.test(group0)$p.value
+  p1 <- lillie.test(group1)$p.value
+
+  normality_results <- rbind(normality_results, data.frame(
+    Variable = var,
+    P_Group0 = p0,
+    P_Group1 = p1,
+    stringsAsFactors = FALSE
+  ))
+}
+
+normality_results
+```
+W pierwszym kroku sprawdzono normalność rozkładów zmiennych numerycznych w dwóch grupach (`Diagnosis = 0` oraz `Diagnosis = 1`) za pomocą testu Lillieforsa. Wszystkie zmienne w obu grupach uzyskały bardzo niskie wartości p-value < 0.05, co świadczy o braku normalności rozkładu.
+
+W związku z tym do porównania rozkładów badanych zmiennych względem zmiennej `Diagnosis` zastosowano nieparametryczny test Manna-Whitneya, który nie wymaga założenia o normalnym rozkładzie danych. 
+```{r, echo=FALSE}
+wilcox_results <- data.frame(
+  Variable = character(),
+  P_Value = numeric(),
+  stringsAsFactors = FALSE
+)
+
+for (var in num_vars) {
+  test_result <- wilcox.test(Train_Original[[var]] ~ Train_Original$Diagnosis)
+  
+  wilcox_results <- rbind(wilcox_results, data.frame(
+    Variable = var,
+    P_Value = round(test_result$p.value, 2),
+    stringsAsFactors = FALSE
+  ))
+}
+
+wilcox_results
+```
+Wyniki testu Manna-Whitneya potwierdzają wcześniejsze obserwacje z wykresów pudełkowych. Zmienne `FunctionalAssessment`, `ADL` oraz `MMSE` wykazały istotne statystycznie różnice p-value < 0.05 między grupami pacjentów z i bez diagnozy Alzheimera, co potwierdza ich przydatność w dalszej analizie klasyfikacyjnej.
+
+Pozostałe zmienne nie wykazały istotnych różnic między grupami p-value > 0.05.
+
+<br>
+
+### **Analiza zależności między zmiennymi kategorycznymi a diagnozą Alzheimera**
+```{r}
+chisq.test(Train_Original$Diagnosis, Train_Original$MemoryComplaints)
+chisq.test(Train_Original$Diagnosis, Train_Original$BehavioralProblems)
+```
+Na podstawie testów otrzymano p-value < 0.05, można zatem przypuszczać, że istnieje statystycznie istotna zależność zarówno między `MemoryComplaints` a diagnozą Alzheimera, jak i między `BehavioralProblems` a diagnozą Alzheimera. W związku z tym obie zmienne mogą zostać uznane za potencjalnie użyteczne cechy w dalszym modelowaniu klasyfikacyjnym.
+
+### **Wybór zmiennych do modelowania**
+
+Zarówno analiza rozkładów, testy statystyczne, jak i ranking Mutual Information wskazują, że największą wartość klasyfikacyjną mają:
+
+- `FunctionalAssessment` 
+- `ADL`
+- `MMSE`
+- `MemoryComplaints`
+- `BehavioralProblems`
+
+To właśnie te cechy najskuteczniej różnicują pacjentów z i bez diagnozy Alzheimera. Pozostałe zmienne mają niską wartość informacyjną i zostają odrzucone z dalszego modelowania.
+
+```{r, echo=FALSE}
+selected_vars <- c("FunctionalAssessment", "ADL", "MMSE", "MemoryComplaints", "BehavioralProblems", "Diagnosis")
+
+Train_Original <- Train_Original[, selected_vars]
+Test_Original <- Test_Original[, selected_vars]
+```
+
+### **Porównanie modeli klasyfikacyjnych i wybór najlepszego wariantu**
+```{r}
+recipe_smote <- recipe(Diagnosis ~ ., data = Train_Original) %>%
+  step_normalize(all_numeric_predictors()) %>% 
+  step_dummy(all_nominal_predictors(), -all_outcomes()) %>%
+  step_smote(Diagnosis, over_ratio = 1)
+
+prep_recipe_smote <- prep(recipe_smote)
+
+Train_Smote <- bake(prep_recipe_smote, new_data = NULL)
+Test_Smote <- bake(prep_recipe_smote, new_data = Test_Original)
+```
+W celu wstępnej oceny skuteczności modeli klasyfikacyjnych zastosowano losowo wybraną metodę balansowania — SMOTE — aby zniwelować niezrównoważenie klas. Na tym etapie celem nie jest wybór optymalnej metody balansowania, lecz stworzenie równych warunków do porównania modeli. Dokładniejszy dobór techniki balansowania zostanie przeprowadzony w dalszej części analizy.
+
+```{r, echo=FALSE}
+ggplot(Train_Smote, aes(x = factor(Diagnosis), fill = factor(Diagnosis))) +
+  geom_bar(width = 0.6) +
+  geom_text(stat = "count", aes(label = ..count..), 
+            vjust = 3.5, color = "white", size = 5) +
+  labs(
+    title = "Rozkład klas w zbiorze treningowym po oversamplingu",
+    x = "Diagnoza Alzheimera (0 = nie, 1 = tak)",
+    y = "Liczba obserwacji"
+  ) +
+  theme_minimal(base_size = 14) +
+  scale_fill_manual(values = c("lightblue", "tomato")) +
+  theme(legend.position = "none",
+        plot.title = element_text(face = "bold", hjust = 0.5))
+```
+
+Zbiór treningowy po oversamplingu zawiera zrównoważoną liczbę obserwacji w obu klasach.
+
+```{r}
+log_model <- logistic_reg() %>% set_engine("glm") %>% set_mode("classification")
+rf_model <- rand_forest() %>% set_engine("ranger") %>% set_mode("classification")
+svm_model <- svm_rbf() %>% set_engine("kernlab") %>% set_mode("classification")
+xgb_model <- boost_tree() %>% set_engine("xgboost") %>% set_mode("classification")
+nb_model <- naive_Bayes() %>% set_engine("naivebayes") %>% set_mode("classification")
+```
+Zdefiniowano kilka wybranych modeli klasyfikacyjnych, które zostaną porównane pod względem skuteczności działania na przygotowanym zbiorze danych.
+
+```{r}
+recall <- yardstick::metric_tweak("recall", yardstick::recall, event_level = "second")
+f_meas <- yardstick::metric_tweak("f_meas", yardstick::f_meas, event_level = "second")
+precision <- yardstick::metric_tweak("precision", yardstick::precision, event_level = "second")
+```
+Zanim przystąpiono do oceny skuteczności modeli, dostosowano metryki oceny tak, aby były liczone względem klasy pozytywnej (wartości `1`, oznaczającej osoby chore) Domyślnie metryki w pakiecie yardstick odnoszą się do klasy `0`, jednak w kontekście diagnozy choroby Alzheimera kluczowe jest skupienie się na skuteczności wykrywania przypadków choroby, a nie osób zdrowych.
+
+#### **Funkcja do oceny modeli klasyfikacyjnych po zastosowaniu SMOTE**
+```{r}
+evaluate_model <- function(model_spec, method_name) {
+
+  fit_mod <- fit(model_spec, formula = Diagnosis ~ ., data = Train_Smote)
+
+  Train_Preds <- predict(fit_mod, new_data = Train_Smote, type = "class") %>%
+    bind_cols(Train_Smote %>% select(Diagnosis))
+
+  Test_Preds <- predict(fit_mod, new_data = Test_Smote, type = "class") %>%
+    bind_cols(Test_Smote %>% select(Diagnosis))
+
+  metric_set_custom <- metric_set(recall, f_meas, precision, accuracy)
+  
+  Train_Metrics <- metric_set_custom(Train_Preds, truth = Diagnosis, estimate = .pred_class)
+  Test_Metrics <- metric_set_custom(Test_Preds, truth = Diagnosis, estimate = .pred_class)
+  
+  results <- tibble(
+    Model = method_name,
+    Recall_Train = Train_Metrics %>% filter(.metric == "recall") %>% pull(.estimate),
+    F1_Score_Train = Train_Metrics %>% filter(.metric == "f_meas") %>% pull(.estimate),
+    Precision_Train = Train_Metrics %>% filter(.metric == "precision") %>% pull(.estimate),
+    Accuracy_Train = Train_Metrics %>% filter(.metric == "accuracy") %>% pull(.estimate),
+    Recall_Test = Test_Metrics %>% filter(.metric == "recall") %>% pull(.estimate),
+    F1_Score_Test = Test_Metrics %>% filter(.metric == "f_meas") %>% pull(.estimate),
+    Precision_Test = Test_Metrics %>% filter(.metric == "precision") %>% pull(.estimate),
+    Accuracy_Test = Test_Metrics %>% filter(.metric == "accuracy") %>% pull(.estimate)
+  ) %>%
+    mutate(across(where(is.numeric), ~ round(.x, 2)))
+
+  return(results)
+}
+```
+
+```{r, echo=FALSE}
+set.seed(2024)
+results_table <- tibble()
+results_table <- bind_rows(
+  results_table,
+  evaluate_model(log_model, "Logistic Regression"),
+  evaluate_model(rf_model, "Random Forest"),
+  evaluate_model(xgb_model, "XGBoost"),
+  evaluate_model(svm_model, "SVM"),
+  evaluate_model(nb_model, "Naive Bayes")
+)
+```
+
+<br>
+
+#### **Porównanie wyników modeli uzyskanych za pomocą powyższej funkcji**
+```{r, echo=FALSE}
+results_table %>%
+  kbl() %>%
+  kable_styling(full_width = FALSE, font_size = 12, position = "center") %>%
+  row_spec(which(results_table$Model == "Random Forest"), bold = TRUE, background = "#DFF0D8")
+```
+
+W kontekście diagnozowania choroby Alzheimera istotne jest ograniczenie liczby przypadków fałszywie negatywnych, czyli sytuacji, w których osoba chora zostaje błędnie zaklasyfikowana jako zdrowa. Z tego względu szczególną uwagę należy zwrócić na metryki takie jak Recall (czułość) oraz F1-score (kompromis między czułością a precyzją). Na podstawie tych metryk możliwe jest zaobserwowanie wyraźnych różnic w skuteczności poszczególnych modeli.
+
+Najgorsze wyniki na zbiorze testowym osiągnął model Naive Bayes, którego `Recall (0.81)` był najniższy spośród wszystkich analizowanych modeli, a `F1-score (0.87)` również był stosunkowo niski w porównaniu do pozostałych. Model Logistic Regression osiągnął relatywnie słabe rezultaty `Recall (0.84)`, `F1_Score (0.79)`, co wskazuje na ograniczoną zdolność tych modeli do wykrywania przypadków choroby.
+
+Najlepsze rezultaty uzyskały modele Random Forest, XGBoost i SVM, z bardzo zbliżonymi wartościami Recall i F1_Score. Jednak to Random Forest wyróżnia się najkorzystniejszym połączeniem wysokiego `Recall (0.93)` oraz najwyższego `F1_Score (0.93)`, co czyni go najbardziej zrównoważonym modelem pod kątem metryk kluczowych dla naszego problemu.
+
+Dodatkowo, różnica między wynikami treningowymi a testowymi nie wskazuje na overfitting – model Random Forest na zbiorze treningowym osiąga wyniki zbliżone do testowych, co sugeruje dobrą generalizację.
+
+**Podsumowując, model Random Forest został wybrany do dalszej analizy ze względu na najwyższą skuteczność w wykrywaniu przypadków (Recall) przy jednoczesnym zachowaniu wysokiego F1-score, co jest kluczowe w zadaniu diagnozy medycznej.**
+
+<br>
+
+### **Ocena wpływu technik resamplingu na skuteczność modelu Random Forest**
+
+Na potrzeby analizy skuteczności modelu Random Forest zdefiniowano kilka alternatywnych metod resamplingu, takich jak ROSE, ADASYN oraz downsampling. Ze względu na wysokie podobieństwo do wcześniej zaprezentowanego kodu (SMOTE), szczegóły implementacyjne nie zostały ponownie przedstawione
+
+```{r, echo=FALSE}
+recipe_original <- recipe(Diagnosis ~ ., data = Train_Original) %>%
+  step_normalize(all_numeric_predictors()) %>% 
+  step_dummy(all_nominal_predictors(), -all_outcomes())
+```
+
+```{r, echo=FALSE}
+recipe_rose <- recipe(Diagnosis ~ ., data = Train_Original) %>%
+  step_normalize(all_numeric_predictors()) %>% 
+  step_dummy(all_nominal_predictors(), -all_outcomes()) %>%
+  step_rose(Diagnosis, seed = 2024, minority_prop = 0.5, minority_smoothness = 1)
+```
+
+```{r, echo=FALSE}
+recipe_adasyn <- recipe(Diagnosis ~ ., data = Train_Original) %>%
+  step_normalize(all_numeric_predictors()) %>% 
+  step_dummy(all_nominal_predictors(), -all_outcomes()) %>%
+  step_adasyn(Diagnosis, neighbors = 5, over_ratio = 0.8, seed = 2024)
+```
+
+```{r, echo=FALSE}
+recipe_downsample <- recipe(Diagnosis ~ ., data = Train_Original) %>%
+  step_normalize(all_numeric_predictors()) %>% 
+  step_dummy(all_nominal_predictors(), -all_outcomes()) %>%
+  step_downsample(Diagnosis)
+```
+
+#### **Funkcja do oceny modelu Random Forest z wykorzystaniem różnych technik resamplingu**
+```{r}
+evaluate_model2 <- function(recipe_obj, method_name) {
+  wf <- workflow() %>%
+    add_model(rf_model) %>%
+    add_recipe(recipe_obj)
+
+  fit_mod <- fit(wf, data = Train_Original)
+
+  Train_Preds <- predict(fit_mod, new_data = Train_Original, type = "class") %>%
+    bind_cols(Train_Original %>% select(Diagnosis))
+  
+  Test_Preds <- predict(fit_mod, new_data = Test_Original, type = "class") %>%
+    bind_cols(Test_Original %>% select(Diagnosis))
+
+  metric_set_custom <- metric_set(recall, f_meas, precision, accuracy)
+
+  Train_Metrics <- metric_set_custom(Train_Preds, truth = Diagnosis, estimate = .pred_class)
+  Test_Metrics <- metric_set_custom(Test_Preds, truth = Diagnosis, estimate = .pred_class)
+  
+  Test_CM <- conf_mat(Test_Preds, truth = Diagnosis, estimate = .pred_class)
+  
+  results <- tibble(
+    Model    = method_name,
+    Recall_Train = Train_Metrics %>% filter(.metric == "recall") %>% pull(.estimate),
+    F1_Score_Train = Train_Metrics %>% filter(.metric == "f_meas") %>% pull(.estimate),
+    Precision_Train = Train_Metrics %>% filter(.metric == "precision") %>% pull(.estimate),
+    Accuracy_Train = Train_Metrics %>% filter(.metric == "accuracy") %>% pull(.estimate),
+    Recall_Test = Test_Metrics %>% filter(.metric == "recall") %>% pull(.estimate),
+    F1_Score_Test = Test_Metrics %>% filter(.metric == "f_meas") %>% pull(.estimate),
+    Precision_Test = Test_Metrics %>% filter(.metric == "precision") %>% pull(.estimate),
+    Accuracy_Test = Test_Metrics %>% filter(.metric == "accuracy") %>% pull(.estimate)
+  ) %>%
+    mutate(across(where(is.numeric), ~ round(.x, 2)))
+
+  return(list(metrics = results,confusion_matrix = Test_CM))
+}
+```
+
+```{r, echo=FALSE}
+set.seed(2024)
+results <- list(
+  original   = evaluate_model2(recipe_original, "Oryginalne dane (bez resamplingu)"),
+  smote      = evaluate_model2(recipe_smote, "SMOTE"),
+  rose       = evaluate_model2(recipe_rose, "ROSE"),
+  adasyn     = evaluate_model2(recipe_adasyn, "ADASYN"),
+  downsample = evaluate_model2(recipe_downsample, "Undersampling (próbkowanie w dół)")
+)
+```
+
+```{r, echo=FALSE}
+results_table <- tibble()
+results_table <- bind_rows(
+  results_table,
+  results$original$metrics,
+  results$smote$metrics,
+  results$rose$metrics,
+  results$adasyn$metrics,
+  results$downsample$metrics
+)
+```
+
+<br>
+
+#### **Porównanie wyników modeli uzyskanych za pomocą powyższej funkcji**
+```{r, echo=FALSE}
+results_table %>%
+  kbl() %>%
+  kable_styling(full_width = FALSE, font_size = 12, position = "center") %>%
+  row_spec(which(results_table$Model == "ADASYN"), bold = TRUE, background = "#DFF0D8")
+```
+
+Pod uwagę wzięto pięć wariantów przetwarzania danych: dane oryginalne (bez resamplingu), SMOTE, ROSE, ADASYN oraz undersampling. Ewaluacji dokonano na podstawie metryk istotnych dla zadania diagnozy medycznej, czyli Recall oraz F1-score.
+
+Najlepsze wyniki osiągnięto dla metody ADASYN (technika oversamplingu generująca więcej obserwacji tam, gdzie klasy są trudniejsze do rozdzielenia), która pozwoliła uzyskać najwyższe wartości zarówno dla `Recall (0.94)`, jak i `F1-score (0.94)` na zbiorze testowym. Oznacza to, że model był najskuteczniejszy w wykrywaniu przypadków choroby przy jednoczesnym utrzymaniu dobrej równowagi między czułością a precyzją. Co istotne, wysoka skuteczność została osiągnięta bez wyraźnych oznak overfittingu.
+
+Pozostałe metody, takie jak SMOTE czy dane oryginalne, również dawały dobre rezultaty `Recall (około 0.93)`, `F1-score (0.93)` jednak nieco niższe od tych uzyskanych przy użyciu ADASYN. Metoda ROSE wypadła najsłabiej – zarówno `Recall (0.90)`, jak i `F1-score (0.90)` były niższe w porównaniu do pozostałych technik.
+
+Warto zauważyć, że undersampling, w przeciwieństwie do pozostałych technik opartych na oversamplingu, działa poprzez usuwanie części obserwacji z klasy dominującej. Mimo potencjalnej utraty informacji, metoda ta również zapewniła zadowalające wyniki `Recall (0.93)`, `F1-score (0.93)` porównywalne z wynikami SMOTE i danych oryginalnych.
+
+**Podsumowując, najlepsze rezultaty uzyskano przy zastosowaniu techniki ADASYN, która zapewniła najwyższą skuteczność wykrywania przypadków choroby (Recall), przy jednoczesnym zachowaniu wysokiego F1-score. Na tej podstawie wybrano tę metodę jako najbardziej odpowiednią technikę resamplingu w dalszej części analizy.**
+
+<br>
+
+```{r, fig.align="center", echo=FALSE}
+cm_data <- as_tibble(results$adasyn$confusion_matrix$table)
+
+ggplot(cm_data, aes(x = Prediction, y = fct_rev(Truth), fill = n)) +
+  geom_tile(color = "white") +
+  geom_text(aes(label = n), size = 6, color = "black", fontface = "bold") +
+  scale_fill_gradient(low = "#f0f0f0", high = "#0072B2") +
+  labs(
+    title = "Macierz pomyłek – Random Forest + ADASYN",
+    x = "Przewidywana klasa",
+    y = "Rzeczywista klasa",
+    fill = "Liczba"
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(legend.position = "none",
+        plot.title = element_text(face = "bold", hjust = 0.5),
+        panel.grid = element_blank())
+```
+
+#### **Wnioski z macierzy pomyłek**
+
+- **True Negatives (TN = 268):** Model bardzo dobrze rozpoznaje przypadki, w których pacjent nie choruje na Alzheimera – poprawnie sklasyfikowano większość zdrowych osób.
+
+- **False Positives (FP = 10):** Niewielka liczba przypadków, w których model błędnie zaklasyfikował zdrowe osoby jako chore – może to skutkować niepotrzebnymi dalszymi badaniami.
+
+- **False Negatives (FN = 9):** Tylko 9 przypadków, w których model nie rozpoznał choroby u osoby chorej. Jest to szczególnie ważne, ponieważ minimalizowanie tej liczby było kluczowym celem analizy.
+
+- **True Positives (TP = 143):** Model skutecznie wykrywa przypadki choroby Alzheimera – większość osób chorych została poprawnie sklasyfikowana.
+
+<br>
+
+```{r, echo=FALSE}
+prep_recipe_adasyn <- prep(recipe_adasyn)
+
+Train_Adasyn <- bake(prep_recipe_adasyn, new_data = NULL)
+Test_Adasyn <- bake(prep_recipe_adasyn, new_data = Test_Original)
+```
+
+```{r, echo=FALSE}
+ggplot(Train_Adasyn, aes(x = factor(Diagnosis), fill = factor(Diagnosis))) +
+  geom_bar(width = 0.6) +
+  geom_text(stat = "count", aes(label = ..count..), 
+            vjust = 3.5, color = "white", size = 5) +
+  labs(
+    title = "Rozkład klas w zbiorze treningowym - ADASYN",
+    x = "Diagnoza Alzheimera (0 = nie, 1 = tak)",
+    y = "Liczba obserwacji"
+  ) +
+  theme_minimal(base_size = 14) +
+  scale_fill_manual(values = c("lightblue", "tomato")) +
+  theme(legend.position = "none",
+        plot.title = element_text(face = "bold", hjust = 0.5))
+```
+
+W wyniku działania algorytmu, przy ustawieniu parametru `over_ratio = 0.8`, klasy nie zostały zbalansowane idealnie po równo. Pomimo tego, model Random Forest osiągnął najlepsze wyniki spośród wszystkich analizowanych wariantów. Pokazuje to, że skuteczne działanie modelu nie zawsze wymaga pełnego zrównoważenia klas.
+
+### **Optymalizacja hiperparametrów**
+
+W tym etapie przeprowadzono strojenie hiperparametrów modelu Random Forest w celu dalszej poprawy jego skuteczności. Proces ten polega na przeszukiwaniu różnych kombinacji ustawień modelu, aby znaleźć te, które maksymalizują istotne metryki. Odpowiednia optymalizacja parametrów pozwala lepiej dopasować model do charakterystyki danych i zmniejszyć ryzyko overfittingu lub niedouczenia.
+
+```{r}
+random_forest <- rand_forest(
+  mtry = tune(),
+  trees = tune(),
+  min_n = tune()
+) %>% 
+  set_engine("ranger") %>% 
+  set_mode("classification")
+
+workflow <- workflow() %>% 
+  add_model(random_forest) %>% 
+  add_recipe(recipe_adasyn)
+```
+Zdefiniowano przestrzeń poszukiwań hiperparametrów dla modelu Random Forest oraz przygotowano workflow do procesu strojenia.
+
+Trzy hiperparametry oznaczone jako `tune()` są poddane optymalizacji:
+
+- `mtry` – liczba zmiennych rozważanych przy każdym podziale drzewa
+- `trees` – liczba drzew w lesie
+- `min_n` – minimalna liczba obserwacji wymagana do rozdzielenia węzła
+
+```{r}
+grid <- grid_random(
+  mtry(range = c(1,5)),
+  trees(range = c(100,500)),
+  min_n(range = c(2,20)),
+  size = 80 
+)
+```
+Następnie zdefiniowano siatkę losową `grid_random()`, ponieważ siatki losowe są uznawane za najbardziej optymalne obliczeniowo.
+
+W wygenerowanej siatce:
+
+- `mtry` testowane jest w zakresie od 1 do 5
+- `trees` w zakresie od 100 do 500
+- `min_n` w zakresie od 2 do 20.
+
+Wygenerowano 80 losowych kombinacji parametrów, które będą wykorzystane w procesie strojenia.
+
+<br>
+
+```{r}
+cv <- vfold_cv(Train_Original, v = 5, strata = Diagnosis)
+```
+Wykorzystano 5-krotną walidację krzyżową, aby rzetelnie ocenić wydajność modelu na różnych podziałach danych. Zastosowano stratyfikację względem zmiennej `Diagnosis`, co zapewnia zachowanie proporcji klas w każdym foldzie. Taka procedura pozwala na bardziej wiarygodną ocenę jakości modelu.
+
+#### **Funkcja do strojenia modelu Random Forest z wykorzystaniem siatki losowej**
+```{r, eval=FALSE}
+random_forest_tuning <- tune_grid(
+  workflow,
+  resamples =  cv,
+  grid = grid,
+  metrics = metric_set(recall, f_meas, precision, accuracy),
+  control = control_grid(save_pred = TRUE)
+)
+```
+
+<br>
+
+```{r, eval=FALSE}
+saveRDS(random_forest_tuning, file = "random_forest_tuning.rds")
+```
+
+```{r}
+random_forest_tuning <- readRDS("random_forest_tuning.rds")
+```
+Wyniki strojenia modelu zapisano do pliku, aby uniknąć ponownego, czasochłonnego przeliczania. W razie potrzeby można je szybko wczytać za pomocą funkcji readRDS().
+
+<br>
+
+```{r, echo=FALSE}
+metrics_df <- collect_metrics(random_forest_tuning) %>%
+  select(mtry, trees, min_n, mean, .metric, .config)
+
+metrics_wide <- metrics_df %>%
+  tidyr::pivot_wider(names_from = .metric, values_from = mean)
+
+metrics_ranked <- metrics_wide %>%
+  mutate(score = 0.4*recall + 0.3*f_meas + 0.2*precision + 0.1*accuracy) %>%
+  arrange(desc(score))
+```
+
+#### **10 najlepszych modeli Random Forest według ważonego wskaźnika score**
+```{r, echo=FALSE}
+metrics_ranked %>%
+  head(10) %>%
+  kbl(digits = 3, escape = FALSE) %>%
+  kable_styling(full_width = FALSE, bootstrap_options = c("striped", "hover", "condensed")) %>%
+  row_spec(1, bold = TRUE, background = "#DFF0D8")
+```
+Widoczne powyżej 10 konfiguracji to najlepsze modele Random Forest, ocenione na podstawie wskaźnika score, który został wyliczony zgodnie ze wzorem: **score = 0.4 · Recall + 0.3 · F1-score + 0.2 · Precision + 0.1 · Accuracy**
+
+Uwzględnienie wielu metryk pozwala na bardziej zrównoważoną ocenę skuteczności modeli.
+
+**Za najlepszy model uznano konfigurację w pierwszym wierszu tabeli, ponieważ uzyskała najwyższy wynik złożonego wskaźnika.**
+
+<br>
+
+```{r, echo=FALSE}
+best_params <- select_best(random_forest_tuning, metric = "f_meas")
+```
+
+```{r, echo=FALSE}
+Best_Workflow_RF <- finalize_workflow(workflow, best_params)
+```
+
+```{r, echo=FALSE}
+fit_mod <- fit(Best_Workflow_RF, data = Train_Original)
+
+Train_Preds <- predict(fit_mod, new_data = Train_Original, type = "class") %>%
+  bind_cols(Train_Original %>% select(Diagnosis))
+
+Test_Preds <- predict(fit_mod, new_data = Test_Original, type = "class") %>%
+  bind_cols(Test_Original %>% select(Diagnosis))
+
+metric_set_custom <- metric_set(recall, f_meas, precision, accuracy)
+
+Train_Metrics <- metric_set_custom(Train_Preds, truth = Diagnosis, estimate = .pred_class)
+Test_Metrics <- metric_set_custom(Test_Preds, truth = Diagnosis, estimate = .pred_class)
+
+Train_CM <- conf_mat(Train_Preds, truth = Diagnosis, estimate = .pred_class)  
+Test_CM <- conf_mat(Test_Preds, truth = Diagnosis, estimate = .pred_class)
+
+results <- tibble(
+  Recall_Train   = Train_Metrics %>% filter(.metric == "recall") %>% pull(.estimate),
+  F1_Score_Train = Train_Metrics %>% filter(.metric == "f_meas") %>% pull(.estimate),
+  Precision_Train = Train_Metrics %>% filter(.metric == "precision") %>% pull(.estimate),
+  Accuracy_Train = Train_Metrics %>% filter(.metric == "accuracy") %>% pull(.estimate),
+  Recall_Test   = Test_Metrics %>% filter(.metric == "recall") %>% pull(.estimate),
+  F1_Score_Test = Test_Metrics %>% filter(.metric == "f_meas") %>% pull(.estimate),
+  Precision_Test = Test_Metrics %>% filter(.metric == "precision") %>% pull(.estimate),
+  Accuracy_Test = Test_Metrics %>% filter(.metric == "accuracy") %>% pull(.estimate)
+) %>%
+  mutate(across(where(is.numeric), ~ round(.x, 2)))
+```
+
+#### **Wyniki końcowe dla wybranego modelu po optymalizacji parametrów**
+```{r, echo=FALSE}
+results %>%
+  kbl(
+    col.names = c("Recall", "F1 Score", "Precision", "Accuracy", 
+                  "Recall", "F1 Score", "Precision", "Accuracy"),
+    format = "html", digits = 2, align = "c"
+  ) %>%
+  add_header_above(c("Train" = 4, "Test" = 4)) %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"), full_width = FALSE, position = "center") %>%
+  row_spec(1, bold = TRUE, background = "#DFF0D8", color = "black")
+```
+
+<br>
+
+```{r, fig.align="center", echo=FALSE}
+cm_data <- as_tibble(Test_CM$table)
+
+ggplot(cm_data, aes(x = Prediction, y = fct_rev(Truth), fill = n)) +
+  geom_tile(color = "white") +
+  geom_text(aes(label = n), size = 6, color = "black", fontface = "bold") +
+  scale_fill_gradient(low = "#f0f0f0", high = "#0072B2") +
+  labs(
+    title = "Macierz pomyłek - zbiór testowy",
+    x = "Przewidywana klasa",
+    y = "Rzeczywista klasa",
+    fill = "Liczba"
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(legend.position = "none",
+        plot.title = element_text(face = "bold", hjust = 0.5),
+        panel.grid = element_blank())
+```
+
+- **Utrzymanie wysokiej skuteczności** – model po dostrojeniu utrzymuje bardzo dobre wyniki metryk (Recall, Precision, F1-score, Accuracy) na poziomie 0.93–0.96, co potwierdza jego wysoką jakość predykcji.
+- **Poprawa generalizacji** - model po dostrojeniu osiąga niemal identyczne wyniki na zbiorze treningowym i testowym, co świadczy o dobrej zdolności generalizacji i braku nadmiernego dopasowania.
+- **Lepsza równowaga między train a test** - w porównaniu do modelu bazowego, który również miał zbliżone wyniki na obu zbiorach, model dostrojony osiąga jeszcze bardziej wyrównane metryki, co świadczy o jego stabilności
+- **Zgodność z modelem bazowym** – macierz pomyłek po optymalizacji parametrów jest identyczna jak w modelu bazowym, co oznacza, że model klasyfikuje przypadki w ten sam sposób. Mimo że rozkład klasyfikacji się nie zmienił, nowy model cechuje się większą stabilnością i lepszą równowagą między wynikami treningowymi a testowymi.
+
+**Mimo że końcowe wyniki klasyfikacji (w tym macierz pomyłek) pozostały takie same jak w modelu bazowym, strojenie parametrów pozwoliło uzyskać model o większej stabilności, lepszym zbalansowaniu wyników między treningiem a testem i równie wysokiej skuteczności. Optymalizacja była zatem zasadna i przyniosła jakościowe korzyści bez pogorszenia wydajności.**
+
+### **Podsumowanie projektu**
+
+Projekt miał na celu stworzenie skutecznego modelu klasyfikacyjnego, który na podstawie danych medycznych przewiduje występowanie choroby Alzheimera. Dane pochodziły z publicznego zbioru obejmującego 2149 pacjentów, zawierającego informacje demograficzne, wyniki testów kognitywnych oraz objawy kliniczne
+
+#### **Najważniejsze etapy realizacji projektu to:**
+
+- **Analiza i selekcja cech** – zastosowano miarę Mutual Information, testy statystyczne oraz analizę rozkładów zmiennych. Wyselekcjonowano m.in. `FunctionalAssessment`, `ADL`, `MMSE`, `MemoryComplaints`, `BehavioralProblems` jako najistotniejsze predyktory.
+- **Balansowanie klas** – dane były niezrównoważone (65% vs. 35%), więc zastosowano techniki oversamplingu (SMOTE, ADASYN), undersamplingu i ROSE w celu zwiększenia skuteczności predykcji.
+- **Testowanie modeli** – porównano różne algorytmy: Logistic Regression, Naive Bayes, SVM, XGBoost oraz Random Forest.
+- **Ocena modeli** – metryki takie jak Recall, F1-score, Precision i Accuracy obliczano względem klasy pozytywnej (chorzy pacjenci). Najlepszy wynik osiągnął model Random Forest.
+- **Optymalizacja hiperparametrów** - strojenie hiperparametrów poprawiło stabilność modelu bez pogorszenia jego wyników.
+
+### **Wnioski końcowe**
+
+- **Random Forest okazał się najskuteczniejszym modelem** – osiągnął najwyższy wynik pod względem Recall (0.93) i F1-score (0.94), przy zachowaniu wysokiej precyzji i dokładności. Odrzucone zostały mniej skuteczne modele (np. Naive Bayes, Logistic Regression).
+- **Technika ADASYN zapewniła najlepsze zbalansowanie klas** – pozwoliła na osiągnięcie najwyższych metryk predykcyjnych przy minimalizacji błędów klasyfikacji. SMOTE i undersampling dały zbliżone, ale nieco słabsze wyniki, natomiast ROSE wypadła najsłabiej.
+- **Model nie wykazywał overfittingu** – podobne wyniki dla zbiorów treningowego i testowego świadczą o dobrej zdolności generalizacji.
+- **Zoptymalizowany model jest stabilny i niezawodny** – mimo że klasyfikacja przypadków względem modelu bazowego się nie zmieniła, strojenie hiperparametrów poprawiło stabilność modelu.
